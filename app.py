@@ -7,10 +7,9 @@ from openpyxl.styles import Font, Alignment, Border, Side
 # ============================================================
 # ★ 調整パラメータ（フォーマットが変わった場合はここを変更）
 # ============================================================
-QTY_ROWS_PER_PAGE = 15
-CAT_ROWS_PER_PAGE = 14
 SUBTOTAL_NAMES = {'小 計', '小　計', '計', '合 計', '合　計', '合　　計', '総 合 計'}
-SKIP_VALS      = {'数 量 書', '工 種 別 数 量 書', '総 括 数 量 書', '種 別', '内 訳', '工 種'}
+SKIP_VALS      = {'数 量 書', '工 種 別 数 量 書', '総 括 数 量 書', '種 別', '内 訳', '工 種',
+                  '数    量    書', '工 種 別 内 訳 書', '総　括　書', '数量書', '工種別数量書'}
 SUMMARY_KEEP   = {'工事価格 合計', '工事価格　合計', '消費税額', '総 合 計', '総　合　計'}
 # ============================================================
 
@@ -65,8 +64,12 @@ def extract_all_pages(pdf_file, progress_cb=None):
             for row in tables[0]:
                 if not row: continue
                 cleaned = [(str(c).replace('\n', ' ').strip() if c else '') for c in row]
-                if cleaned[0] in SKIP_VALS: continue
+                # ページ番号行スキップ
                 if is_page_num(cleaned[0]): continue
+                if is_page_num(cleaned[1] if len(cleaned) > 1 else ''): continue
+                # スキップ対象文字列
+                if cleaned[0] in SKIP_VALS: continue
+                if len(cleaned) > 1 and cleaned[1] in SKIP_VALS: continue
                 if ptype == 'summary':
                     if cleaned[1] in {'内 訳', '内　訳'}: continue
                     if (cleaned[1] and not cleaned[0] and not cleaned[2]
@@ -82,58 +85,14 @@ def extract_all_pages(pdf_file, progress_cb=None):
 
 # ---------- 数量書 ----------
 
-def write_qty_page_break(ws, r, page_num, total_pages):
-    ws.merge_cells(f'B{r}:H{r}')
-    ws.cell(r,1).border = thin_border()
-    ws.cell(r,2).border = thin_border()
-    ws.row_dimensions[r].height = 15
-    r += 1
-    ws.merge_cells(f'A{r}:H{r}')
-    ws.cell(r,1).value = f' {page_num} / {total_pages}'
-    ws.cell(r,1).font  = Font(name='MS Gothic', size=8)
-    ws.row_dimensions[r].height = 15
-    r += 1
-    ws.merge_cells(f'A{r}:H{r}')
-    ws.cell(r,1).value = '数    量    書'
-    ws.cell(r,1).font  = Font(name='MS Gothic', size=11, bold=True)
-    ws.cell(r,1).alignment = Alignment(horizontal='center', vertical='center')
-    ws.row_dimensions[r].height = 20
-    r += 1
-    h1 = r
-    ws.cell(h1,1).border = thin_border()
-    ws.cell(h1,2).value = '種　　別'
-    ws.cell(h1,2).font  = Font(name='MS Gothic', size=9)
-    ws.cell(h1,2).alignment = Alignment(horizontal='center', vertical='center')
-    ws.cell(h1,2).border = thin_border()
-    for col, h in zip([3,4,5,6,7,8], ['形状・寸法','数  量','単 位','単　価','金　額','摘      要']):
-        ws.cell(h1,col).value = h
-        ws.cell(h1,col).font  = Font(name='MS Gothic', size=9)
-        ws.cell(h1,col).alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        ws.cell(h1,col).border = thin_border()
-    ws.row_dimensions[h1].height = 30
-    r += 1
-    h2 = r
-    ws.cell(h2,1).border = thin_border()
-    ws.cell(h2,2).value = '内　　訳'
-    ws.cell(h2,2).font  = Font(name='MS Gothic', size=9)
-    ws.cell(h2,2).alignment = Alignment(horizontal='left', vertical='center')
-    ws.cell(h2,2).border = thin_border()
-    for col in range(3, 9):
-        ws.merge_cells(f'{chr(64+col)}{h1}:{chr(64+col)}{h2}')
-    ws.row_dimensions[h2].height = 20
-    r += 1
-    for col in range(1, 9):
-        ws.cell(r,col).border = thin_border()
-    ws.row_dimensions[r].height = 15
-    r += 1
-    return r
-
 def build_quantity_sheet(ws, rows):
     ws.title = '数量書'
     for col, w in zip('ABCDEFGH', [8, 42, 28, 10, 8, 14, 14, 28]):
         ws.column_dimensions[col].width = w
+
     data = [row for row in rows if len(row) >= 2 and not all(v == '' for v in row)]
-    total_pages = (len(data) + QTY_ROWS_PER_PAGE - 1) // QTY_ROWS_PER_PAGE
+
+    # ── ヘッダー（1ページ分のみ、以降は繰り返さない） ──
     r = 1
     ws.merge_cells(f'A{r}:H{r}')
     ws.cell(r,1).value = '数    量    書'
@@ -141,6 +100,7 @@ def build_quantity_sheet(ws, rows):
     ws.cell(r,1).alignment = Alignment(horizontal='center', vertical='center')
     ws.row_dimensions[r].height = 20
     r += 1
+
     h1 = r
     ws.cell(h1,1).border = thin_border()
     ws.cell(h1,2).value = '種　　別'
@@ -154,6 +114,7 @@ def build_quantity_sheet(ws, rows):
         ws.cell(h1,col).border = thin_border()
     ws.row_dimensions[h1].height = 30
     r += 1
+
     h2 = r
     ws.cell(h2,1).border = thin_border()
     ws.cell(h2,2).value = '内　　訳'
@@ -164,32 +125,31 @@ def build_quantity_sheet(ws, rows):
         ws.merge_cells(f'{chr(64+col)}{h1}:{chr(64+col)}{h2}')
     ws.row_dimensions[h2].height = 20
     r += 1
-    ws.merge_cells(f'B{r}:H{r}')
-    ws.cell(r,1).border = thin_border()
-    ws.cell(r,2).border = thin_border()
-    ws.row_dimensions[r].height = 20
-    r += 1
+
+    # ── データ行（ページ区切りなし） ──
     subtotal_map      = {}
     current_big       = None
     current_sub       = None
-    page_num          = 1
-    data_count        = 0
     section_data_rows = []
+
     for vals in data:
         vals = (vals + [''] * 8)[:8]
         num, name, shape, qty, unit, price, amt, note = vals
         bold        = bool(num)
         is_subtotal = name in SUBTOTAL_NAMES
+
         if num.startswith('【'):
             current_big = num; current_sub = None; section_data_rows = []
         elif num:
             current_sub = num; section_data_rows = []
+
         apply_cell(ws.cell(r,1), num,   bold=bold, center=True)
         apply_cell(ws.cell(r,2), name,  bold=bold or is_subtotal)
         apply_cell(ws.cell(r,3), shape)
         apply_cell(ws.cell(r,4), clean_qty(qty) if qty else '', center=True)
         apply_cell(ws.cell(r,5), unit,  center=True)
         apply_cell(ws.cell(r,6), '',    center=True)
+
         if qty and unit and not is_subtotal and not bold:
             set_formula(ws.cell(r,7), f'=INT(F{r}*D{r})')
             section_data_rows.append(r)
@@ -204,66 +164,14 @@ def build_quantity_sheet(ws, rows):
             section_data_rows = []
         else:
             apply_cell(ws.cell(r,7), '', center=True)
+
         apply_cell(ws.cell(r,8), note)
-        ws.row_dimensions[r].height = 25
+        ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
-        data_count += 1
-        if data_count >= QTY_ROWS_PER_PAGE:
-            r = write_qty_page_break(ws, r, page_num, total_pages)
-            page_num  += 1
-            data_count = 0
+
     return subtotal_map
 
 # ---------- 工事別数量書 ----------
-
-def write_cat_header_block(ws, r, page_num, total_pages):
-    ws.merge_cells(f'B{r}:E{r}')
-    ws.cell(r,1).border = thin_border()
-    ws.cell(r,2).border = thin_border()
-    ws.cell(r,6).border = thin_border()
-    ws.row_dimensions[r].height = 15
-    r += 1
-    ws.merge_cells(f'A{r}:F{r}')
-    ws.cell(r,1).value = f' {page_num} / {total_pages}'
-    ws.cell(r,1).font  = Font(name='MS Gothic', size=8)
-    ws.row_dimensions[r].height = 15
-    r += 1
-    ws.cell(r,1).border = thin_border()
-    ws.merge_cells(f'B{r}:F{r}')
-    ws.cell(r,2).value = '　　　　　　　　　　　　　　　　　　工 種 別 内 訳 書 '
-    ws.cell(r,2).font  = Font(name='MS Gothic', size=10, bold=True)
-    ws.cell(r,2).alignment = Alignment(horizontal='left', vertical='center')
-    ws.cell(r,2).border = thin_border()
-    ws.row_dimensions[r].height = 20
-    r += 1
-    h1 = r
-    for col, h in [(1,None),(2,'工    種'),(3,'内  容 (数量)'),(4,'金　額 （円）'),(5,' 摘      要')]:
-        ws.cell(h1,col).value = h
-        ws.cell(h1,col).font  = Font(name='MS Gothic', size=9)
-        ws.cell(h1,col).alignment = Alignment(horizontal='center', vertical='center')
-        ws.cell(h1,col).border = thin_border()
-    ws.row_dimensions[h1].height = 16
-    r += 1
-    h2 = r
-    ws.cell(h2,1).border = thin_border()
-    ws.cell(h2,2).value = '種    別'
-    ws.cell(h2,2).font  = Font(name='MS Gothic', size=9)
-    ws.cell(h2,2).alignment = Alignment(horizontal='center', vertical='center')
-    ws.cell(h2,2).border = thin_border()
-    ws.merge_cells(f'C{h1}:C{h2}')
-    ws.merge_cells(f'D{h1}:D{h2}')
-    ws.merge_cells(f'E{h1}:F{h2}')
-    ws.cell(h2,3).border = thin_border()
-    ws.cell(h2,4).border = thin_border()
-    ws.cell(h2,5).border = thin_border()
-    ws.row_dimensions[h2].height = 16
-    r += 1
-    ws.merge_cells(f'B{r}:F{r}')
-    ws.cell(r,1).border = thin_border()
-    ws.cell(r,2).border = thin_border()
-    ws.row_dimensions[r].height = 15
-    r += 1
-    return r
 
 def build_category_sheet(ws, rows, subtotal_map):
     ws.title = '工事別数量書'
@@ -273,9 +181,11 @@ def build_category_sheet(ws, rows, subtotal_map):
     ws.column_dimensions['D'].width = 22.6
     ws.column_dimensions['E'].width = 26.6
     ws.column_dimensions['F'].width = 4.2
+
     data = [row for row in rows
             if len(row) >= 2 and not all(v == '' for v in row) and not is_page_num(row[0])]
-    total_pages = (len(data) + CAT_ROWS_PER_PAGE - 1) // CAT_ROWS_PER_PAGE
+
+    # ── ヘッダー（1ページ分のみ） ──
     r = 1
     ws.cell(r,1).border = thin_border()
     ws.merge_cells(f'B{r}:F{r}')
@@ -285,6 +195,7 @@ def build_category_sheet(ws, rows, subtotal_map):
     ws.cell(r,2).border = thin_border()
     ws.row_dimensions[r].height = 20
     r += 1
+
     h1 = r
     for col, h in [(1,None),(2,'工    種'),(3,'内  容 (数量)'),(4,'金　額 （円）'),(5,' 摘      要')]:
         ws.cell(h1,col).value = h
@@ -293,6 +204,7 @@ def build_category_sheet(ws, rows, subtotal_map):
         ws.cell(h1,col).border = thin_border()
     ws.row_dimensions[h1].height = 16
     r += 1
+
     h2 = r
     ws.cell(h2,1).border = thin_border()
     ws.cell(h2,2).value = '種    別'
@@ -307,26 +219,28 @@ def build_category_sheet(ws, rows, subtotal_map):
     ws.cell(h2,5).border = thin_border()
     ws.row_dimensions[h2].height = 16
     r += 1
-    ws.merge_cells(f'B{r}:F{r}')
-    ws.cell(r,1).border = thin_border()
-    ws.cell(r,2).border = thin_border()
-    ws.row_dimensions[r].height = 15
-    r += 1
+
+    # ── データ行（ページ区切りなし） ──
     current_big  = None
-    section_rows = []
-    page_num     = 1
-    data_count   = 0
+    section_rows = []   # 「計」(直接工事費小計)用：1-1〜1-n の金額行
+    grand_rows   = []   # 「合 計」用：計＋共通仮設費＋現場管理費＋一般管理費等 の行
+
     for row in data:
         vals = (row + [''] * 5)[:5]
         num, name, qty, amt, note = vals
         bold        = bool(num)
         is_subtotal = name in SUBTOTAL_NAMES
+        is_total    = name in {'合 計', '合　計', '合　　計'}
+
         if num.startswith('【'):
-            current_big = num; section_rows = []
+            current_big = num; section_rows = []; grand_rows = []
+
         apply_cell(ws.cell(r,1), num,  bold=bold, center=True)
         apply_cell(ws.cell(r,2), name, bold=bold or is_subtotal)
         apply_cell(ws.cell(r,3), qty,  center=True)
+
         if qty == '一式' and num and not num.startswith('【') and not is_subtotal:
+            # 直接工事費の細目（1-1等）→数量書の小計を参照
             ref = subtotal_map.get((current_big, num))
             if ref:
                 set_formula(ws.cell(r,4), f'=数量書!G{ref}', right=True)
@@ -336,26 +250,39 @@ def build_category_sheet(ws, rows, subtotal_map):
             ws.merge_cells(f'E{r}:F{r}')
             apply_cell(ws.cell(r,5), note)
             ws.cell(r,6).border = thin_border()
+            # 共通仮設費(2)/現場管理費(3)/一般管理費等(4)/有価発生材(5)は合計対象
+            if '-' not in num:
+                grand_rows.append(r)
+        elif is_total:
+            # 「合 計」＝ 計＋共通仮設費＋現場管理費＋一般管理費等…（連続行をSUM）
+            if grand_rows:
+                set_formula(ws.cell(r,4),
+                            f'=SUM(D{grand_rows[0]}:D{grand_rows[-1]})', right=True)
+            else:
+                apply_cell(ws.cell(r,4), '', right=True)
+            ws.merge_cells(f'E{r}:F{r}')
+            apply_cell(ws.cell(r,5), '')
+            ws.cell(r,6).border = thin_border()
+            grand_rows = []
         elif is_subtotal and section_rows:
+            # 「計」＝ 直接工事費（1-1〜1-n）の合算
             formula = (f'=D{section_rows[0]}' if len(section_rows) == 1
                        else f'=SUM(D{section_rows[0]}:D{section_rows[-1]})')
             set_formula(ws.cell(r,4), formula, right=True)
             ws.merge_cells(f'E{r}:F{r}')
             apply_cell(ws.cell(r,5), '')
             ws.cell(r,6).border = thin_border()
+            grand_rows.append(r)  # 「計」も合計対象に含める
             section_rows = []
         else:
             apply_cell(ws.cell(r,4), '', right=True)
             ws.merge_cells(f'E{r}:F{r}')
             apply_cell(ws.cell(r,5), note)
             ws.cell(r,6).border = thin_border()
-        ws.row_dimensions[r].height = 20
+
+        ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
-        data_count += 1
-        if data_count >= CAT_ROWS_PER_PAGE:
-            r = write_cat_header_block(ws, r, page_num, total_pages)
-            page_num  += 1
-            data_count = 0
+
     return ws
 
 # ---------- 総括数量書 ----------
@@ -369,11 +296,14 @@ def build_summary_sheet(ws, rows, ws_cat):
     ws.column_dimensions['E'].width = 20.7
     ws.column_dimensions['F'].width = 20.7
     ws.column_dimensions['G'].width = 4.2
+
+    # ── ヘッダー ──
     ws.merge_cells('A1:G1')
     ws['A1'].value = '総　括　書'
     ws['A1'].font  = Font(name='MS Gothic', size=11)
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
     ws.row_dimensions[1].height = 32
+
     ws.cell(2,1).border = thin_border()
     ws.merge_cells('B2:C2')
     ws.cell(2,2).value = '種     別'
@@ -389,6 +319,7 @@ def build_summary_sheet(ws, rows, ws_cat):
     ws.cell(2,5).alignment = Alignment(horizontal='center', vertical='center')
     ws.cell(2,5).border = thin_border()
     ws.row_dimensions[2].height = 16
+
     ws.cell(3,1).border = thin_border()
     ws.merge_cells('B3:C3')
     ws.cell(3,2).value = '内     訳'
@@ -398,6 +329,7 @@ def build_summary_sheet(ws, rows, ws_cat):
     ws.cell(3,4).border = thin_border()
     ws.cell(3,5).border = thin_border()
     ws.row_dimensions[3].height = 16
+
     ws.merge_cells('D2:D3')
     ws.merge_cells('E2:E3')
     ws.merge_cells('F2:G3')
@@ -405,10 +337,13 @@ def build_summary_sheet(ws, rows, ws_cat):
     ws.cell(2,6).font  = Font(name='MS Gothic', size=9)
     ws.cell(2,6).alignment = Alignment(horizontal='center', vertical='center')
     ws.cell(2,6).border = thin_border()
+
     ws.merge_cells('B4:G4')
     ws.cell(4,1).border = thin_border()
     ws.cell(4,2).border = thin_border()
-    ws.row_dimensions[4].height = 27
+    ws.row_dimensions[4].height = 25
+
+    # 工事別数量書の「合 計」行番号をマップ
     cat_total_map = {}
     big_code = None
     for i, row in enumerate(ws_cat.iter_rows(min_row=4, values_only=True), 4):
@@ -418,21 +353,26 @@ def build_summary_sheet(ws, rows, ws_cat):
         if code.startswith('【'): big_code = code
         if name in {'合 計', '合　計', '合　　計'} and big_code:
             cat_total_map[big_code] = i
+
     r = 5
     item_rows = []
     data = [row for row in rows
             if len(row) >= 2 and not all(v == '' for v in row) and not is_page_num(row[0])]
+
     for vals in data:
         vals = (vals + [''] * 5)[:5]
         num, name, qty, amt, note = vals
         bold = bool(num)
+
         apply_cell(ws.cell(r,1), num, bold=bold, center=True)
         ws.merge_cells(f'B{r}:C{r}')
         apply_cell(ws.cell(r,2), name, bold=bold)
         ws.cell(r,3).border = thin_border()
         apply_cell(ws.cell(r,4), qty, center=True)
-        if num and num.isdigit() and qty == '一式':
-            ref = cat_total_map.get(f'【{num}】')
+
+        # 工事番号は【1】形式。そのままキーとして工事別の合計行を参照
+        if num.startswith('【') and qty == '一式':
+            ref = cat_total_map.get(num)
             if ref: set_formula(ws.cell(r,5), f'=工事別数量書!D{ref}', right=True)
             else:   apply_cell(ws.cell(r,5), '', right=True)
             item_rows.append(r)
@@ -444,31 +384,12 @@ def build_summary_sheet(ws, rows, ws_cat):
             set_formula(ws.cell(r,5), f'=E{r-2}+E{r-1}', right=True)
         else:
             apply_cell(ws.cell(r,5), '', right=True)
+
         ws.merge_cells(f'F{r}:G{r}')
         apply_cell(ws.cell(r,6), note)
         ws.cell(r,7).border = thin_border()
-        ws.row_dimensions[r].height = 27
+        ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
-    while r <= 18:
-        ws.merge_cells(f'B{r}:C{r}')
-        ws.cell(r,1).border = thin_border()
-        ws.cell(r,2).border = thin_border()
-        ws.cell(r,3).border = thin_border()
-        ws.cell(r,4).border = thin_border()
-        ws.cell(r,5).border = thin_border()
-        ws.merge_cells(f'F{r}:G{r}')
-        ws.cell(r,6).border = thin_border()
-        ws.cell(r,7).border = thin_border()
-        ws.row_dimensions[r].height = 15
-        r += 1
-    ws.merge_cells('B19:F19')
-    ws.cell(19,1).border = thin_border()
-    ws.cell(19,2).border = thin_border()
-    ws.row_dimensions[19].height = 15
-    ws.merge_cells('A20:G20')
-    ws.cell(20,1).value = ' 1 / 18'
-    ws.cell(20,1).font  = Font(name='MS Gothic', size=8)
-    ws.row_dimensions[20].height = 15
 
 # ---------- Excel生成 ----------
 
