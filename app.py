@@ -299,11 +299,13 @@ def write_cat_header_block(ws, r, page_num, total_pages):
     ws.cell(r,1).font  = Font(name='MS Gothic', size=8)
     ws.row_dimensions[r].height = 15
     r += 1
-    # タイトル（A-B間に縦線を入れないため A1 は罫線なし、B以降を結合）
+    # タイトル（中央寄せ＋外枠罫線）
     ws.merge_cells(f'A{r}:E{r}')
-    ws.cell(r,1).value = '　　　　　　　　　　　　　　　　　　工 種 別 数 量 書 '
+    ws.cell(r,1).value = '工 種 別 数 量 書'
     ws.cell(r,1).font  = Font(name='MS Gothic', size=10, bold=True)
-    ws.cell(r,1).alignment = Alignment(horizontal='left', vertical='center')
+    ws.cell(r,1).alignment = Alignment(horizontal='center', vertical='center')
+    for c in range(1, 6):
+        ws.cell(r,c).border = thin_border()
     ws.row_dimensions[r].height = 20
     r += 1
     # ヘッダー1行目（A-B結合で「工種」とし、A-B間の縦線を消す）
@@ -356,12 +358,14 @@ def build_category_sheet(ws, rows, subtotal_map):
     total_pages = (len(data) + CAT_ROWS_PER_PAGE - 1) // CAT_ROWS_PER_PAGE
 
     # ── ヘッダー（1ページ目） ──
-    # タイトル（A-B間に縦線を入れないため A〜E結合）
+    # タイトル（中央寄せ＋外枠罫線）
     r = 1
     ws.merge_cells(f'A{r}:E{r}')
-    ws.cell(r,1).value = '　　　　　　　　　　　　　　　　　　工 種 別 数 量 書 '
+    ws.cell(r,1).value = '工 種 別 数 量 書'
     ws.cell(r,1).font  = Font(name='MS Gothic', size=10, bold=True)
-    ws.cell(r,1).alignment = Alignment(horizontal='left', vertical='center')
+    ws.cell(r,1).alignment = Alignment(horizontal='center', vertical='center')
+    for c in range(1, 6):
+        ws.cell(r,c).border = thin_border()
     ws.row_dimensions[r].height = 20
     r += 1
 
