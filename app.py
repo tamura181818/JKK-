@@ -21,6 +21,54 @@ def thin_border():
     s = Side(style='thin')
     return Border(left=s, right=s, top=s, bottom=s)
 
+def border_merged(ws, cell_range):
+    """結合範囲の全構成セルに四辺罫線を付与（環境差で枠線が消えるのを防ぐ）。
+    cell_range 例: 'A1:E1'"""
+    from openpyxl.utils import range_boundaries
+    min_c, min_r, max_c, max_r = range_boundaries(cell_range)
+    for rr in range(min_r, max_r + 1):
+        for cc in range(min_c, max_c + 1):
+            ws.cell(rr, cc).border = thin_border()
+
+def finalize_borders(ws, ncols, no_border_titles=None):
+    """データ範囲の全セル（結合セル内側含む）に四辺罫線を一括付与。
+    結合セルは外周セルにも外向き罫線を明示設定し、環境差で枠線が
+    消えるのを防ぐ。ページ番号行・枠外タイトル行は除外。"""
+    no_border_titles = no_border_titles or set()
+
+    def skip_row(r):
+        av = ws.cell(r, 1).value
+        sval = av.strip() if isinstance(av, str) else ''
+        if sval and is_page_num(sval):
+            return True
+        if sval and sval in no_border_titles:
+            return True
+        return False
+
+    # 1) まず全セルに四辺罫線
+    for r in range(1, ws.max_row + 1):
+        if skip_row(r):
+            continue
+        for c in range(1, ncols + 1):
+            ws.cell(r, c).border = thin_border()
+
+    # 2) 結合セルの外周セルに、外向きの罫線を明示設定（内側の縦/横線が
+    #    保存時に消えても外枠は残るようにする）
+    s = Side(style='thin')
+    for m in list(ws.merged_cells.ranges):
+        r1, r2, c1, c2 = m.min_row, m.max_row, m.min_col, m.max_col
+        if skip_row(r1):
+            continue
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                cell = ws.cell(r, c)
+                b = cell.border
+                top    = s if r == r1 else b.top
+                bottom = s if r == r2 else b.bottom
+                left   = s if c == c1 else b.left
+                right  = s if c == c2 else b.right
+                cell.border = Border(top=top, bottom=bottom, left=left, right=right)
+
 def apply_cell(cell, value, bold=False, center=False, right=False):
     cell.value = value
     cell.font = Font(name='MS Gothic', size=9, bold=bold)
@@ -281,6 +329,8 @@ def build_quantity_sheet(ws, rows):
         ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
 
+    # 罫線を一括補完（結合セル内側含む）。数量書のタイトルは枠外なので除外
+    finalize_borders(ws, 8, no_border_titles={'数    量    書'})
     return subtotal_map
 
 # ---------- 工事別数量書 ----------
@@ -477,6 +527,8 @@ def build_category_sheet(ws, rows, subtotal_map):
             page_num  += 1
             data_count = 0
 
+    # 罫線を一括補完（結合セル内側含む）。工事別のタイトルは枠内なので罫線あり
+    finalize_borders(ws, 5)
     return ws
 
 # ---------- 総括数量書 ----------
@@ -634,6 +686,9 @@ def build_summary_sheet(ws, rows, ws_cat):
         blank_row(r)
         r += 1
 
+    # 罫線を一括補完（結合セル内側含む）。総括のタイトルは枠内なので罫線あり
+    finalize_borders(ws, 7)
+
 # ---------- Excel生成 ----------
 
 def build_excel(summary_rows, category_rows, quantity_rows):
@@ -702,4 +757,3 @@ if uploaded:
 
 st.divider()
 st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
-
