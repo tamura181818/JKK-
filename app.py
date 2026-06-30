@@ -430,6 +430,27 @@ def write_cat_header_block(ws, r, page_num, total_pages):
     r += 1
     return r
 
+def count_cat_pages(data, limit):
+    """工事別数量書の総ページ数を、実際の改ページ判定と同一ロジックで事前計算。
+    改ページ条件：【n】(工事番号)が変わる or 1頁の行数(limit)に達する。"""
+    pages = 1
+    line_in_page = 0
+    first_block = True
+    for row in data:
+        num = str(row[0]).strip() if row[0] else ''
+        need_break = False
+        if num.startswith('【') and not first_block:
+            need_break = True
+        if line_in_page >= limit:
+            need_break = True
+        if need_break:
+            pages += 1
+            line_in_page = 0
+        if num.startswith('【'):
+            first_block = False
+        line_in_page += 1
+    return pages
+
 def build_category_sheet(ws, rows, subtotal_map):
     ws.title = '工事別数量書'
     ws.column_dimensions['A'].width = 6.6
@@ -440,11 +461,9 @@ def build_category_sheet(ws, rows, subtotal_map):
 
     data = [row for row in rows
             if len(row) >= 2 and not all(v == '' for v in row) and not is_page_num(row[0])]
-    # 【n】（工事番号）ごとに1ページ。総ページ数は【n】の出現数。
-    total_pages = sum(1 for row in data
-                      if str(row[0]).strip().startswith('【'))
-    if total_pages < 1:
-        total_pages = 1
+    # 改ページは【n】が変わる or 1頁の行数(CAT_ROWS_PER_PAGE)に達したとき。
+    # 総ページ数を実際の改ページ判定と同一ロジックで事前計算する。
+    total_pages = count_cat_pages(data, CAT_ROWS_PER_PAGE)
 
     # ── ヘッダー（1ページ目） ──
     # タイトル（中央寄せ＋外枠罫線）
@@ -495,6 +514,7 @@ def build_category_sheet(ws, rows, subtotal_map):
     grand_rows   = []   # 「合 計」用：計＋共通仮設費＋現場管理費＋一般管理費等 の行
     page_num     = 1
     first_block  = True   # 最初の【n】は1ページ目をそのまま使う（改ページしない）
+    line_in_page = 0      # 現ページのデータ行数
 
     for row in data:
         vals = (row + [''] * 5)[:5]
@@ -503,12 +523,20 @@ def build_category_sheet(ws, rows, subtotal_map):
         is_subtotal = name in SUBTOTAL_NAMES
         is_total    = name in {'合 計', '合　計', '合　　計'}
 
-        # 【n】（工事番号）が変わるたびに改ページし、各ページ先頭に【n】を置く。
-        # 最初の【n】は1ページ目ヘッダーの直後に置くため改ページしない。
+        # 改ページ判定（行を書く前）：
+        #   (a) 【n】(工事番号)が変わる … 各ページ先頭に【n】を置く
+        #   (b) 1頁の行数(CAT_ROWS_PER_PAGE)に達する … 長い【n】の継続ページ
+        # 最初の【n】は1ページ目ヘッダー直後に置くため改ページしない。
+        need_break = False
+        if num.startswith('【') and not first_block:
+            need_break = True
+        if line_in_page >= CAT_ROWS_PER_PAGE:
+            need_break = True
+        if need_break:
+            page_num += 1
+            r = write_cat_header_block(ws, r, page_num, total_pages)
+            line_in_page = 0
         if num.startswith('【'):
-            if not first_block:
-                page_num += 1
-                r = write_cat_header_block(ws, r, page_num, total_pages)
             first_block = False
 
         # 工事全体名行（番号なし・名称あり・数量なし）＝見出し行：B~Eを結合
@@ -520,6 +548,7 @@ def build_category_sheet(ws, rows, subtotal_map):
             ws.merge_cells(f'B{r}:E{r}')
             ws.row_dimensions[r].height = 25
             r += 1
+            line_in_page += 1
             continue
 
         if num.startswith('【'):
@@ -563,6 +592,7 @@ def build_category_sheet(ws, rows, subtotal_map):
 
         ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
+        line_in_page += 1
 
     # 罫線を一括補完（結合セル内側含む）。工事別のタイトルは枠内なので罫線あり
     finalize_borders(ws, 5)
