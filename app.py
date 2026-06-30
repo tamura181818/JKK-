@@ -9,7 +9,12 @@ from openpyxl.styles import Font, Alignment, Border, Side
 # ============================================================
 QTY_ROWS_PER_PAGE = 15   # 数量書：1ページあたりのデータ行数
 CAT_ROWS_PER_PAGE = 14   # 工事別数量書：1ページあたりのデータ行数
-SUBTOTAL_NAMES = {'小 計', '小　計', '計', '合 計', '合　計', '合　　計', '総 合 計'}
+SUBTOTAL_NAMES = {'小 計', '小　計', '計', '合 計', '合　計', '合　　計', '総 合 計', '総　合　計'}
+# 集計レベル（小計→計→合計→総合計）。数量書G列の集計式チェーンで使用
+SHOUKEI_NAMES   = {'小 計', '小　計'}
+KEI_NAMES       = {'計'}
+GOUKEI_NAMES    = {'合 計', '合　計', '合　　計'}
+SOUGOUKEI_NAMES = {'総 合 計', '総　合　計'}
 SKIP_VALS      = {'数 量 書', '工 種 別 数 量 書', '総 括 数 量 書', '種 別', '内 訳', '工 種',
                   '数    量    書', '工 種 別 内 訳 書', '総　括　書', '数量書', '工種別数量書'}
 SUMMARY_KEEP   = {'工事価格 合計', '工事価格　合計', '消費税額', '総 合 計', '総　合　計'}
@@ -81,6 +86,14 @@ def set_formula(cell, formula, right=False):
     cell.font = Font(name='MS Gothic', size=9)
     cell.alignment = Alignment(horizontal='right' if right else 'center', vertical='center')
     cell.border = thin_border()
+
+def set_qty_sum(cell, src_rows):
+    """数量書G列の集計式を設定。src_rows各行のG列を加算連結（改ページ対応）。
+    src_rowsが空ならブランク。"""
+    if src_rows:
+        set_formula(cell, '=' + '+'.join(f'G{x}' for x in src_rows))
+    else:
+        apply_cell(cell, '', center=True)
 
 def clean_qty(val):
     try:
@@ -270,7 +283,10 @@ def build_quantity_sheet(ws, rows):
     subtotal_map      = {}
     current_big       = None
     current_sub       = None
-    section_data_rows = []
+    detail_rows       = []   # 明細 → 小計
+    shoukei_rows      = []   # 小計 → 計
+    kei_rows          = []   # 計   → 合計
+    goukei_rows       = []   # 合計 → 総合計
     page_num          = 1
     first_data_done   = False  # 最初のデータ行を出力済みか
 
@@ -299,9 +315,13 @@ def build_quantity_sheet(ws, rows):
             continue
 
         if num.startswith('【'):
-            current_big = num; current_sub = None; section_data_rows = []
+            current_big = num; current_sub = None
+            detail_rows = []   # 新工事先頭：明細のみクリア。
+            # 小計/計/合計の各リストは上位集計行が走った時のみクリアする。
+            # 特に合計リスト(goukei_rows)は工事をまたいで全工事の合計を
+            # 合算できるよう、総合計が出るまで持ち越す。
         elif num:
-            current_sub = num; section_data_rows = []
+            current_sub = num; detail_rows = []
 
         apply_cell(ws.cell(r,1), num,   bold=bold, center=True)
         apply_cell(ws.cell(r,2), name,  bold=bold or is_subtotal)
@@ -312,16 +332,31 @@ def build_quantity_sheet(ws, rows):
 
         if qty and unit and not is_subtotal and not bold:
             set_formula(ws.cell(r,7), f'=INT(F{r}*D{r})')
-            section_data_rows.append(r)
+            detail_rows.append(r)
         elif is_subtotal:
-            # 改ページ行を挟むため加算式で連結（連続範囲SUMだとゴミ行を巻き込む）
-            if section_data_rows:
-                set_formula(ws.cell(r,7),
-                            '=' + '+'.join(f'G{x}' for x in section_data_rows))
+            # 集計式チェーン：小計→計→合計→総合計。
+            # 改ページ行を挟むため連続範囲SUMではなく加算式で連結する。
+            # 下位リストが空の場合は一段下へフォールバック（段省略様式に対応）。
+            if name in SHOUKEI_NAMES:
+                set_qty_sum(ws.cell(r,7), detail_rows)
+                shoukei_rows.append(r)
+                detail_rows = []
+            elif name in KEI_NAMES:
+                set_qty_sum(ws.cell(r,7), shoukei_rows or detail_rows)
+                kei_rows.append(r)
+                shoukei_rows = []; detail_rows = []
+            elif name in GOUKEI_NAMES:
+                set_qty_sum(ws.cell(r,7), kei_rows or shoukei_rows or detail_rows)
+                goukei_rows.append(r)
+                kei_rows = []; shoukei_rows = []; detail_rows = []
+            elif name in SOUGOUKEI_NAMES:
+                set_qty_sum(ws.cell(r,7),
+                            goukei_rows or kei_rows or shoukei_rows or detail_rows)
+                goukei_rows = []; kei_rows = []; shoukei_rows = []; detail_rows = []
             else:
-                apply_cell(ws.cell(r,7), '', center=True)
+                set_qty_sum(ws.cell(r,7), detail_rows)
+                detail_rows = []
             subtotal_map[(current_big, current_sub)] = r
-            section_data_rows = []
         else:
             apply_cell(ws.cell(r,7), '', center=True)
 
@@ -405,7 +440,11 @@ def build_category_sheet(ws, rows, subtotal_map):
 
     data = [row for row in rows
             if len(row) >= 2 and not all(v == '' for v in row) and not is_page_num(row[0])]
-    total_pages = (len(data) + CAT_ROWS_PER_PAGE - 1) // CAT_ROWS_PER_PAGE
+    # 【n】（工事番号）ごとに1ページ。総ページ数は【n】の出現数。
+    total_pages = sum(1 for row in data
+                      if str(row[0]).strip().startswith('【'))
+    if total_pages < 1:
+        total_pages = 1
 
     # ── ヘッダー（1ページ目） ──
     # タイトル（中央寄せ＋外枠罫線）
@@ -455,7 +494,7 @@ def build_category_sheet(ws, rows, subtotal_map):
     section_rows = []   # 「計」(直接工事費小計)用：1-1〜1-n の金額行
     grand_rows   = []   # 「合 計」用：計＋共通仮設費＋現場管理費＋一般管理費等 の行
     page_num     = 1
-    data_count   = 0
+    first_block  = True   # 最初の【n】は1ページ目をそのまま使う（改ページしない）
 
     for row in data:
         vals = (row + [''] * 5)[:5]
@@ -463,6 +502,14 @@ def build_category_sheet(ws, rows, subtotal_map):
         bold        = bool(num)
         is_subtotal = name in SUBTOTAL_NAMES
         is_total    = name in {'合 計', '合　計', '合　　計'}
+
+        # 【n】（工事番号）が変わるたびに改ページし、各ページ先頭に【n】を置く。
+        # 最初の【n】は1ページ目ヘッダーの直後に置くため改ページしない。
+        if num.startswith('【'):
+            if not first_block:
+                page_num += 1
+                r = write_cat_header_block(ws, r, page_num, total_pages)
+            first_block = False
 
         # 工事全体名行（番号なし・名称あり・数量なし）＝見出し行：B~Eを結合
         if name and not num and not qty and not is_subtotal:
@@ -473,11 +520,6 @@ def build_category_sheet(ws, rows, subtotal_map):
             ws.merge_cells(f'B{r}:E{r}')
             ws.row_dimensions[r].height = 25
             r += 1
-            data_count += 1
-            if data_count >= CAT_ROWS_PER_PAGE:
-                r = write_cat_header_block(ws, r, page_num, total_pages)
-                page_num  += 1
-                data_count = 0
             continue
 
         if num.startswith('【'):
@@ -521,11 +563,6 @@ def build_category_sheet(ws, rows, subtotal_map):
 
         ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
-        data_count += 1
-        if data_count >= CAT_ROWS_PER_PAGE:
-            r = write_cat_header_block(ws, r, page_num, total_pages)
-            page_num  += 1
-            data_count = 0
 
     # 罫線を一括補完（結合セル内側含む）。工事別のタイトルは枠内なので罫線あり
     finalize_borders(ws, 5)
@@ -753,6 +790,11 @@ if uploaded:
 
         except Exception as e:
             progress.empty()
+            st.error(f'エラーが発生しました: {e}')
+
+st.divider()
+st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
+
             st.error(f'エラーが発生しました: {e}')
 
 st.divider()
