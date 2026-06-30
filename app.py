@@ -794,8 +794,3 @@ if uploaded:
 
 st.divider()
 st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
-
-            st.error(f'エラーが発生しました: {e}')
-
-st.divider()
-st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
