@@ -95,6 +95,13 @@ def set_qty_sum(cell, src_rows):
     else:
         apply_cell(cell, '', center=True)
 
+def qty_blank_row(ws, r):
+    """数量書の空行（罫線枠付き）。PDF同様に8列すべてに縦罫線を引く。
+    1ページの行数(QTY_ROWS_PER_PAGE)に満たないページを埋めるのに使う。"""
+    for c in range(1, 9):
+        ws.cell(r, c).border = thin_border()
+    ws.row_dimensions[r].height = 25
+
 def clean_qty(val):
     try:
         f = float(val)
@@ -109,6 +116,17 @@ def is_page_num(val):
 
 # ---------- PDF解析 ----------
 
+def _merged_hlines(page, snap=2.0):
+    """ページ内の水平罫線のtop座標を、近接線をまとめて返す。
+    工種別ページでテーブル下端が切れて最終行（例：現場管理費）が
+    落ちるのを防ぐため、全水平線を明示的な行境界として使う。"""
+    tops = sorted(e['top'] for e in page.horizontal_edges)
+    merged = []
+    for t in tops:
+        if not merged or t - merged[-1] > snap:
+            merged.append(t)
+    return merged
+
 def extract_all_pages(pdf_file, progress_cb=None):
     summary_rows, category_rows, quantity_rows = [], [], []
     with pdfplumber.open(pdf_file) as pdf:
@@ -122,7 +140,21 @@ def extract_all_pages(pdf_file, progress_cb=None):
             elif '工' in first and '種' in first: ptype = 'category'
             elif '数' in first and '量' in first: ptype = 'quantity'
             else: continue
-            tables = page.extract_tables()
+            # 工種別ページは、テーブル下端が切れてページ最終行（例：現場
+            # 管理費）が落ちることがあるため、全水平線を明示の行境界に使う。
+            # 数量書・総括は構造が複雑なのでdefault抽出のまま。
+            if ptype == 'category':
+                hls = _merged_hlines(page)
+                if hls:
+                    tables = page.extract_tables({
+                        'vertical_strategy': 'lines',
+                        'horizontal_strategy': 'explicit',
+                        'explicit_horizontal_lines': hls,
+                    })
+                else:
+                    tables = page.extract_tables()
+            else:
+                tables = page.extract_tables()
             if not tables: continue
             after_header = False  # 「内訳/種別」ヘッダー直後フラグ（工事全体名行の検出用）
             first_in_page = True  # このPDFページで最初に追加するデータ行か
@@ -289,6 +321,7 @@ def build_quantity_sheet(ws, rows):
     goukei_rows       = []   # 合計 → 総合計
     page_num          = 1
     first_data_done   = False  # 最初のデータ行を出力済みか
+    line_in_qty_page  = 0      # 現ページの本文行数
 
     for raw in data:
         page_start = len(raw) >= 9 and raw[8] == '__PAGESTART__'
@@ -299,8 +332,13 @@ def build_quantity_sheet(ws, rows):
 
         # PDFページが変わったら改ページ（ただし最初のページ先頭では入れない）
         if page_start and first_data_done:
+            # 改ページ前に、現ページが規定行数(QTY_ROWS_PER_PAGE)に満たなければ
+            # 空行で埋める（項目が少ないページもPDF同様に1頁分の行数を保つ）。
+            while line_in_qty_page < QTY_ROWS_PER_PAGE:
+                qty_blank_row(ws, r); r += 1; line_in_qty_page += 1
             r = write_qty_page_break(ws, r, page_num, total_pages)
             page_num += 1
+            line_in_qty_page = 0
         first_data_done = True
 
         # 工事全体名行（番号なし・名称あり・数量なし、小計系でない）＝見出し行：B~Hを結合
@@ -312,6 +350,7 @@ def build_quantity_sheet(ws, rows):
             ws.merge_cells(f'B{r}:H{r}')
             ws.row_dimensions[r].height = 25
             r += 1
+            line_in_qty_page += 1
             continue
 
         if num.startswith('【'):
@@ -363,6 +402,11 @@ def build_quantity_sheet(ws, rows):
         apply_cell(ws.cell(r,8), note)
         ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
         r += 1
+        line_in_qty_page += 1
+
+    # 最終ページが規定行数に満たなければ空行で埋める（PDF同様に行数を保つ）
+    while 0 < line_in_qty_page < QTY_ROWS_PER_PAGE:
+        qty_blank_row(ws, r); r += 1; line_in_qty_page += 1
 
     # 罫線を一括補完（結合セル内側含む）。数量書のタイトルは枠外なので除外
     finalize_borders(ws, 8, no_border_titles={'数    量    書'})
@@ -372,8 +416,7 @@ def build_quantity_sheet(ws, rows):
 
 def write_cat_header_block(ws, r, page_num, total_pages):
     """工事別数量書のページ区切り（空行→ページ番号→タイトル→ヘッダー2行→空行）"""
-    # 空行（前ページ末尾の空行：データ行と同じ高さ25、全列に罫線）
-    ws.merge_cells(f'B{r}:E{r}')
+    # 空行（前ページ末尾の空行：データ行と同じ高さ25、全列に縦罫線）
     for c in range(1, 6):
         ws.cell(r,c).border = thin_border()
     ws.row_dimensions[r].height = 25
@@ -422,8 +465,7 @@ def write_cat_header_block(ws, r, page_num, total_pages):
     ws.cell(h2,5).border = thin_border()
     ws.row_dimensions[h2].height = 16
     r += 1
-    # 空行
-    ws.merge_cells(f'B{r}:E{r}')
+    # 空行（全列に縦罫線）
     for c in range(1, 6):
         ws.cell(r,c).border = thin_border()
     ws.row_dimensions[r].height = 25
@@ -431,9 +473,8 @@ def write_cat_header_block(ws, r, page_num, total_pages):
     return r
 
 def cat_blank_row(ws, r):
-    """工事別数量書の空行（罫線枠付き、A列空・B:E結合）。
+    """工事別数量書の空行（罫線枠付き）。PDF同様に5列すべてに縦罫線を引く。
     項目の少ないページを1頁分の行数まで埋めるのに使う。"""
-    ws.merge_cells(f'B{r}:E{r}')
     for c in range(1, 6):
         ws.cell(r, c).border = thin_border()
     ws.row_dimensions[r].height = 25
@@ -844,4 +885,3 @@ if uploaded:
 
 st.divider()
 st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
-
