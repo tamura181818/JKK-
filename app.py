@@ -430,6 +430,14 @@ def write_cat_header_block(ws, r, page_num, total_pages):
     r += 1
     return r
 
+def cat_blank_row(ws, r):
+    """工事別数量書の空行（罫線枠付き、A列空・B:E結合）。
+    項目の少ないページを1頁分の行数まで埋めるのに使う。"""
+    ws.merge_cells(f'B{r}:E{r}')
+    for c in range(1, 6):
+        ws.cell(r, c).border = thin_border()
+    ws.row_dimensions[r].height = 25
+
 def count_cat_pages(data, limit):
     """工事別数量書の総ページ数を、実際の改ページ判定と同一ロジックで事前計算。
     改ページ条件：【n】(工事番号)が変わる or 1頁の行数(limit)に達する。"""
@@ -533,6 +541,12 @@ def build_category_sheet(ws, rows, subtotal_map):
         if line_in_page >= CAT_ROWS_PER_PAGE:
             need_break = True
         if need_break:
+            # 改ページ前に、現ページが規定行数(CAT_ROWS_PER_PAGE)未満なら
+            # 空行で埋める（項目が少ないページもPDF同様に1頁分の行数を保つ）。
+            while line_in_page < CAT_ROWS_PER_PAGE:
+                cat_blank_row(ws, r)
+                r += 1
+                line_in_page += 1
             page_num += 1
             r = write_cat_header_block(ws, r, page_num, total_pages)
             line_in_page = 0
@@ -591,6 +605,12 @@ def build_category_sheet(ws, rows, subtotal_map):
             apply_cell(ws.cell(r,5), note)
 
         ws.row_dimensions[r].height = 25  # ★ 全データ行25pt均一
+        r += 1
+        line_in_page += 1
+
+    # 最終ページが規定行数未満なら空行で埋める（PDF同様に1頁分の行数を保つ）
+    while 0 < line_in_page < CAT_ROWS_PER_PAGE:
+        cat_blank_row(ws, r)
         r += 1
         line_in_page += 1
 
@@ -824,3 +844,4 @@ if uploaded:
 
 st.divider()
 st.caption('対応フォーマット: 総括数量書 / 工事別数量書 / 数量書 の3シート構成PDF')
+
